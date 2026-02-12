@@ -3,7 +3,7 @@ import pandas as pd
 import sqlite3
 import plotly.express as px
 from datetime import timedelta, datetime
-
+import os
 
 st.set_page_config(layout="wide")
 
@@ -15,9 +15,8 @@ st.markdown(
     unsafe_allow_html=True
 )
 
-
 # ==================================================
-# 🎨 ENTERPRISE STYLE
+# 🎨 STYLE
 # ==================================================
 st.markdown("""
 <style>
@@ -46,8 +45,7 @@ background:#16a34a;
 padding:10px;
 border-radius:10px;
 text-align:center;
-font-weight:600;
-">
+font-weight:600;">
 🟢 LIVE MODE — Real-Time Monitoring Active  
 Last Updated: {datetime.now().strftime('%H:%M:%S')}
 </div>
@@ -57,21 +55,29 @@ Last Updated: {datetime.now().strftime('%H:%M:%S')}
 # 🏫 HEADER
 # ==================================================
 col1, col2 = st.columns([1,4])
+
 with col1:
-    try:
-        st.image("logo.png", width=80)
-    except:
-        pass
+    logo_path = os.path.join(os.path.dirname(__file__), "logo.png")
+    if os.path.exists(logo_path):
+        st.image(logo_path, width=80)
+
 with col2:
     st.markdown("## 🎯 Saiwittaya Executive War Room")
 
 st.markdown("---")
 
 # ==================================================
-# 📂 LOAD HISTORY DB (SAFE MODE)
+# 📂 LOAD DATABASE (SAFE PATH)
 # ==================================================
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+db_path = os.path.join(BASE_DIR, "attendance_history.db")
+
+if not os.path.exists(db_path):
+    st.error(f"Database not found at {db_path}")
+    st.stop()
+
 try:
-    conn = sqlite3.connect("attendance_history.db")
+    conn = sqlite3.connect(db_path)
     df = pd.read_sql("SELECT * FROM history", conn)
     conn.close()
 except Exception as e:
@@ -82,29 +88,33 @@ if df.empty:
     st.warning("No attendance data yet.")
     st.stop()
 
-# Ensure required columns exist
+# Validate columns
 required_cols = ["date","class_name","status","student_id","name"]
 for col in required_cols:
     if col not in df.columns:
         st.error(f"Missing column in database: {col}")
         st.stop()
 
-# Safe datetime conversion
 df["date"] = pd.to_datetime(df["date"], errors="coerce")
 df = df.dropna(subset=["date"])
-
 df["grade"] = df["class_name"].str.extract(r"(ม\.\d+)")
 
 today = df["date"].max().date()
 filtered = df[df["date"].dt.date == today]
 
 # ==================================================
-# 📘 LOAD STUDENT MASTER
+# 📘 LOAD STUDENT MASTER (SAFE PATH)
 # ==================================================
-try:
-    student_df = pd.read_excel("StudentData.xlsx")
-except:
-    st.error("StudentData.xlsx not found.")
+excel_path = os.path.join(BASE_DIR, "StudentData.xlsx")
+
+if not os.path.exists(excel_path):
+    st.error(f"StudentData.xlsx not found at {excel_path}")
+    st.stop()
+
+student_df = pd.read_excel(excel_path)
+
+if "Class" not in student_df.columns:
+    st.error("Column 'Class' not found in StudentData.xlsx")
     st.stop()
 
 student_df["class_name"] = student_df["Class"].apply(
@@ -129,7 +139,7 @@ if selected_class != "ทั้งหมด":
     filtered = filtered[filtered["class_name"] == selected_class]
 
 # ==================================================
-# 📊 KPI CALCULATION (SAFE)
+# 📊 KPI CALCULATION
 # ==================================================
 if selected_class != "ทั้งหมด":
     total_students = len(student_df[student_df["class_name"] == selected_class])
@@ -182,21 +192,18 @@ if late > 0:
 st.markdown("---")
 
 # ==================================================
-# 📊 CHART SECTION
+# 📊 CHARTS
 # ==================================================
 colA,colB,colC = st.columns(3)
 
-# PIE
 with colA:
     st.markdown("### Attendance Overview")
     if not filtered.empty:
         status_counts = filtered["status"].value_counts().reset_index()
         status_counts.columns=["Status","Count"]
         fig1 = px.pie(status_counts,names="Status",values="Count",hole=0.5)
-        fig1.update_layout(paper_bgcolor="#1e293b",font_color="white")
         st.plotly_chart(fig1,use_container_width=True)
 
-# WEEKLY TREND (FIXED GROUPBY BUG)
 with colB:
     st.markdown("### Weekly Late Trend")
     last7 = df[df["date"].dt.date >= today - timedelta(days=6)].copy()
@@ -209,21 +216,18 @@ with colB:
     )
     if not trend.empty:
         fig_area = px.area(trend,x="day",y="Late",markers=True)
-        fig_area.update_layout(paper_bgcolor="#1e293b",font_color="white")
         st.plotly_chart(fig_area,use_container_width=True)
 
-# CHECKOUT
 with colC:
     st.markdown("### Checkout Overview")
-    if "checkout_status" in filtered.columns and not filtered.empty:
+    if "checkout_status" in filtered.columns:
         checkout_counts = filtered["checkout_status"].value_counts().reset_index()
         checkout_counts.columns=["Status","Count"]
-        fig2 = px.bar(checkout_counts,x="Status",y="Count",color="Status")
-        fig2.update_layout(paper_bgcolor="#1e293b",font_color="white")
+        fig2 = px.bar(checkout_counts,x="Status",y="Count")
         st.plotly_chart(fig2,use_container_width=True)
 
 # ==================================================
-# ⚡ RECENT SCANS (SAFE SORT)
+# ⚡ RECENT SCANS
 # ==================================================
 st.markdown("---")
 st.markdown("### ⚡ Recent Scans")
