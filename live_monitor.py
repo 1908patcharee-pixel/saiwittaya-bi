@@ -3,14 +3,18 @@ import pandas as pd
 import sqlite3
 import plotly.express as px
 from datetime import timedelta, datetime
-from streamlit_autorefresh import st_autorefresh
+
 
 st.set_page_config(layout="wide")
 
 # ==================================================
 # 🔄 AUTO REFRESH (10 วินาที)
 # ==================================================
-st_autorefresh(interval=10000, key="refresh")
+st.markdown(
+    "<meta http-equiv='refresh' content='10'>",
+    unsafe_allow_html=True
+)
+
 
 # ==================================================
 # 🎨 ENTERPRISE STYLE
