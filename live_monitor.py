@@ -2,11 +2,15 @@ import streamlit as st
 import pandas as pd
 import sqlite3
 import plotly.express as px
-import plotly.graph_objects as go
-from datetime import timedelta
-from PIL import Image
+from datetime import timedelta, datetime
+from streamlit_autorefresh import st_autorefresh
 
 st.set_page_config(layout="wide")
+
+# ==================================================
+# 🔄 AUTO REFRESH (10 วินาที)
+# ==================================================
+st_autorefresh(interval=10000, key="refresh")
 
 # ==================================================
 # 🎨 ENTERPRISE STYLE
@@ -17,86 +21,136 @@ html, body, [data-testid="stAppViewContainer"] {
     background: linear-gradient(135deg,#0f172a,#1e293b);
     color:white;
 }
-.block-container { padding-top:0.5rem; }
 .card {
     background:#1e293b;
-    padding:12px;
+    padding:15px;
     border-radius:12px;
 }
 .kpi-number {
-    font-size:26px;
+    font-size:28px;
     font-weight:800;
-}
-.ribbon {
-    background:#2563eb;
-    padding:8px;
-    border-radius:8px;
-    text-align:center;
-    font-weight:600;
 }
 </style>
 """, unsafe_allow_html=True)
 
 # ==================================================
+# 🟢 LIVE STATUS BAR
+# ==================================================
+st.markdown(f"""
+<div style="
+background:#16a34a;
+padding:10px;
+border-radius:10px;
+text-align:center;
+font-weight:600;
+">
+🟢 LIVE MODE — Real-Time Monitoring Active  
+Last Updated: {datetime.now().strftime('%H:%M:%S')}
+</div>
+""", unsafe_allow_html=True)
+
+# ==================================================
 # 🏫 HEADER
 # ==================================================
-col_logo, col_title, col_filter = st.columns([1,4,2])
-
-with col_logo:
+col1, col2 = st.columns([1,4])
+with col1:
     try:
         st.image("logo.png", width=80)
     except:
         pass
+with col2:
+    st.markdown("## 🎯 Saiwittaya Executive War Room")
 
-with col_title:
-    st.markdown("## Saiwittaya BI Control Room")
+st.markdown("---")
 
 # ==================================================
-# 📂 LOAD DATA
+# 📂 LOAD HISTORY DB (SAFE MODE)
 # ==================================================
-conn = sqlite3.connect("attendance.db")
-df = pd.read_sql("SELECT * FROM attendance", conn)
-conn.close()
-
-if df.empty:
-    st.warning("No data available")
+try:
+    conn = sqlite3.connect("attendance_history.db")
+    df = pd.read_sql("SELECT * FROM history", conn)
+    conn.close()
+except Exception as e:
+    st.error(f"Database Error: {e}")
     st.stop()
 
-df["date"] = pd.to_datetime(df["date"])
+if df.empty:
+    st.warning("No attendance data yet.")
+    st.stop()
+
+# Ensure required columns exist
+required_cols = ["date","class_name","status","student_id","name"]
+for col in required_cols:
+    if col not in df.columns:
+        st.error(f"Missing column in database: {col}")
+        st.stop()
+
+# Safe datetime conversion
+df["date"] = pd.to_datetime(df["date"], errors="coerce")
+df = df.dropna(subset=["date"])
+
 df["grade"] = df["class_name"].str.extract(r"(ม\.\d+)")
 
 today = df["date"].max().date()
 filtered = df[df["date"].dt.date == today]
 
 # ==================================================
+# 📘 LOAD STUDENT MASTER
+# ==================================================
+try:
+    student_df = pd.read_excel("StudentData.xlsx")
+except:
+    st.error("StudentData.xlsx not found.")
+    st.stop()
+
+student_df["class_name"] = student_df["Class"].apply(
+    lambda x: f"ม.{x}" if "/" in str(x) and not str(x).startswith("ม.") else x
+)
+
+# ==================================================
 # 🔎 FILTER
 # ==================================================
-grades = ["ทั้งหมด"] + sorted(filtered["grade"].dropna().unique())
-classes = ["ทั้งหมด"] + sorted(filtered["class_name"].unique())
+col_filter1, col_filter2 = st.columns(2)
 
-selected_grade = col_filter.selectbox("ระดับชั้น", grades)
+grades = ["ทั้งหมด"] + sorted(df["grade"].dropna().unique())
+classes = ["ทั้งหมด"] + sorted(df["class_name"].unique())
+
+selected_grade = col_filter1.selectbox("ระดับชั้น", grades)
+selected_class = col_filter2.selectbox("ห้อง", classes)
 
 if selected_grade != "ทั้งหมด":
     filtered = filtered[filtered["grade"] == selected_grade]
-
-selected_class = col_filter.selectbox("ห้อง", classes)
 
 if selected_class != "ทั้งหมด":
     filtered = filtered[filtered["class_name"] == selected_class]
 
 # ==================================================
-# 📊 KPI
+# 📊 KPI CALCULATION (SAFE)
 # ==================================================
-total = len(filtered)
+if selected_class != "ทั้งหมด":
+    total_students = len(student_df[student_df["class_name"] == selected_class])
+elif selected_grade != "ทั้งหมด":
+    total_students = len(student_df[student_df["class_name"].str.contains(selected_grade)])
+else:
+    total_students = len(student_df)
+
 late = len(filtered[filtered["status"]=="late"])
 absent = len(filtered[filtered["status"]=="absent"])
 ontime = len(filtered[filtered["status"]=="ontime"])
-checked_out = len(filtered[filtered["checkout_status"]=="ออกจากโรงเรียนแล้ว"])
-not_out = len(filtered[filtered["checkout_status"]=="ยังไม่สแกนออก"])
 
-attendance_rate = ((ontime+late)/total*100) if total else 0
-checkout_rate = (checked_out/total*100) if total else 0
+if "checkout_status" in filtered.columns:
+    checked_out = len(filtered[filtered["checkout_status"]=="ออกจากโรงเรียนแล้ว"])
+    not_out = len(filtered[filtered["checkout_status"]=="ยังไม่สแกนออก"])
+else:
+    checked_out = 0
+    not_out = 0
 
+attendance_rate = ((ontime+late)/total_students*100) if total_students else 0
+checkout_rate = (checked_out/total_students*100) if total_students else 0
+
+# ==================================================
+# 📊 KPI DISPLAY
+# ==================================================
 k1,k2,k3,k4,k5,k6 = st.columns(6)
 
 def kpi(col,value,label,color):
@@ -107,170 +161,80 @@ def kpi(col,value,label,color):
     </div>
     """, unsafe_allow_html=True)
 
-kpi(k1,total,"Students","#60a5fa")
+kpi(k1,total_students,"Students","#60a5fa")
 kpi(k2,f"{attendance_rate:.1f}%","Attendance","#22c55e")
 kpi(k3,late,"Late","#f97316")
 kpi(k4,absent,"Absent","#ef4444")
 kpi(k5,f"{checkout_rate:.1f}%","Checkout %","#facc15")
 kpi(k6,not_out,"Not Checkout","#eab308")
 
+if late > 0:
+    st.markdown("""
+    <div style="background:#dc2626;padding:10px;border-radius:10px;text-align:center;font-weight:bold;">
+    🚨 ALERT: มีนักเรียนมาสายวันนี้
+    </div>
+    """, unsafe_allow_html=True)
+
 st.markdown("---")
 
 # ==================================================
-# 📊 MAIN GRID
+# 📊 CHART SECTION
 # ==================================================
-col1,col2,col3 = st.columns([1.2,1.5,1.2])
+colA,colB,colC = st.columns(3)
 
-# ==================================================
-# LEFT – ATTENDANCE
-# ==================================================
-with col1:
+# PIE
+with colA:
     st.markdown("### Attendance Overview")
+    if not filtered.empty:
+        status_counts = filtered["status"].value_counts().reset_index()
+        status_counts.columns=["Status","Count"]
+        fig1 = px.pie(status_counts,names="Status",values="Count",hole=0.5)
+        fig1.update_layout(paper_bgcolor="#1e293b",font_color="white")
+        st.plotly_chart(fig1,use_container_width=True)
 
-    status_counts = filtered["status"].value_counts().reset_index()
-    status_counts.columns=["Status","Count"]
-
-    fig1 = px.pie(
-        status_counts,
-        names="Status",
-        values="Count",
-        hole=0.5,
-        color_discrete_sequence=px.colors.qualitative.Bold
-    )
-
-    fig1.update_layout(
-        paper_bgcolor="#1e293b",
-        font_color="white",
-        height=320
-    )
-
-    st.plotly_chart(fig1, use_container_width=True)
-
-# ==================================================
-# CENTER – TREND
-# ==================================================
-with col2:
+# WEEKLY TREND (FIXED GROUPBY BUG)
+with colB:
     st.markdown("### Weekly Late Trend")
-
-    last7 = df[df["date"].dt.date >= today - timedelta(days=6)]
-
+    last7 = df[df["date"].dt.date >= today - timedelta(days=6)].copy()
+    last7["day"] = last7["date"].dt.date
     trend = (
         last7[last7["status"]=="late"]
-        .groupby(last7["date"].dt.date)
+        .groupby("day")
         .size()
         .reset_index(name="Late")
     )
+    if not trend.empty:
+        fig_area = px.area(trend,x="day",y="Late",markers=True)
+        fig_area.update_layout(paper_bgcolor="#1e293b",font_color="white")
+        st.plotly_chart(fig_area,use_container_width=True)
 
-    fig_area = go.Figure()
-
-    fig_area.add_trace(go.Scatter(
-        x=trend["date"],
-        y=trend["Late"],
-        fill='tozeroy',
-        mode='lines+markers',
-        line=dict(width=4,color="#22c55e")
-    ))
-
-    fig_area.update_layout(
-        paper_bgcolor="#1e293b",
-        plot_bgcolor="#1e293b",
-        font_color="white",
-        height=320
-    )
-
-    st.plotly_chart(fig_area,use_container_width=True)
-
-# ==================================================
-# RIGHT – CHECKOUT
-# ==================================================
-with col3:
+# CHECKOUT
+with colC:
     st.markdown("### Checkout Overview")
-
-    checkout_counts = filtered["checkout_status"].value_counts().reset_index()
-    checkout_counts.columns=["Status","Count"]
-
-    fig2 = px.bar(
-        checkout_counts,
-        x="Status",
-        y="Count",
-        color="Status"
-    )
-
-    fig2.update_layout(
-        paper_bgcolor="#1e293b",
-        plot_bgcolor="#1e293b",
-        font_color="white",
-        height=320
-    )
-
-    st.plotly_chart(fig2,use_container_width=True)
+    if "checkout_status" in filtered.columns and not filtered.empty:
+        checkout_counts = filtered["checkout_status"].value_counts().reset_index()
+        checkout_counts.columns=["Status","Count"]
+        fig2 = px.bar(checkout_counts,x="Status",y="Count",color="Status")
+        fig2.update_layout(paper_bgcolor="#1e293b",font_color="white")
+        st.plotly_chart(fig2,use_container_width=True)
 
 # ==================================================
-# 🔍 DRILLDOWN 2 LEVEL
+# ⚡ RECENT SCANS (SAFE SORT)
 # ==================================================
 st.markdown("---")
-st.markdown("### 🔍 Drilldown Explorer")
+st.markdown("### ⚡ Recent Scans")
 
-selected_status = st.multiselect(
-    "เลือกสถานะ",
-    filtered["status"].unique()
+if "time" in df.columns:
+    df["time"] = pd.to_datetime(df["time"], errors="coerce")
+    recent = (
+        df.sort_values("time", ascending=False)
+        .drop_duplicates(["student_id","date"])
+        .head(5)
+    )
+else:
+    recent = df.sort_values("date", ascending=False).head(5)
+
+st.dataframe(
+    recent[["date","class_name","student_id","name","status"]],
+    use_container_width=True
 )
-
-if selected_status:
-    level1 = filtered[filtered["status"].isin(selected_status)]
-
-    selected_class2 = st.multiselect(
-        "เลือกห้อง (Level 2)",
-        level1["class_name"].unique()
-    )
-
-    if selected_class2:
-        level2 = level1[level1["class_name"].isin(selected_class2)]
-    else:
-        level2 = level1
-
-    st.dataframe(
-        level2[["class_name","student_id","name","status","checkout_status","time"]],
-        height=250,
-        use_container_width=True
-    )
-
-    csv_selected = level2.to_csv(index=False).encode("utf-8")
-    st.download_button(
-        "⬇ Export Selected",
-        data=csv_selected,
-        file_name="drilldown_export.csv",
-        mime="text/csv"
-    )
-
-# ==================================================
-# 📊 HEATMAP
-# ==================================================
-st.markdown("### Heatmap (Late by Class)")
-
-heat = (
-    filtered[filtered["status"]=="late"]
-    .groupby(["grade","class_name"])
-    .size()
-    .reset_index(name="Late")
-)
-
-if not heat.empty:
-    pivot = heat.pivot(index="grade",
-                       columns="class_name",
-                       values="Late").fillna(0)
-
-    fig_heat = px.imshow(
-        pivot,
-        text_auto=True,
-        color_continuous_scale="YlOrBr"
-    )
-
-    fig_heat.update_layout(
-        paper_bgcolor="#1e293b",
-        font_color="white",
-        height=350
-    )
-
-    st.plotly_chart(fig_heat,use_container_width=True)
-
