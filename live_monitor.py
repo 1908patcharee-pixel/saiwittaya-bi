@@ -4,21 +4,21 @@ import sqlite3
 import plotly.express as px
 from datetime import timedelta, datetime
 import os
+import time
 
 st.set_page_config(layout="wide")
 
-from streamlit.runtime.scriptrunner import add_script_run_ctx
-import threading
-import time
+# ==================================================
+# 🔄 SAFE AUTO REFRESH (ไม่กระพริบ / ไม่ crash)
+# ==================================================
+REFRESH_SECONDS = 10
 
-def auto_refresh():
-    while True:
-        time.sleep(10)
-        st.rerun()
+if "last_refresh" not in st.session_state:
+    st.session_state.last_refresh = time.time()
 
-thread = threading.Thread(target=auto_refresh)
-thread.start()
-
+if time.time() - st.session_state.last_refresh > REFRESH_SECONDS:
+    st.session_state.last_refresh = time.time()
+    st.rerun()
 
 # ==================================================
 # 🎨 STYLE
@@ -51,7 +51,7 @@ padding:10px;
 border-radius:10px;
 text-align:center;
 font-weight:600;">
-🟢 LIVE MODE — Real-Time Monitoring Active  
+🟢 LIVE MODE — Real-Time Monitoring  
 Last Updated: {datetime.now().strftime('%H:%M:%S')}
 </div>
 """, unsafe_allow_html=True)
@@ -61,8 +61,10 @@ Last Updated: {datetime.now().strftime('%H:%M:%S')}
 # ==================================================
 col1, col2 = st.columns([1,4])
 
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
 with col1:
-    logo_path = os.path.join(os.path.dirname(__file__), "logo.png")
+    logo_path = os.path.join(BASE_DIR, "logo.png")
     if os.path.exists(logo_path):
         st.image(logo_path, width=80)
 
@@ -72,32 +74,26 @@ with col2:
 st.markdown("---")
 
 # ==================================================
-# 📂 LOAD DATABASE (SAFE PATH)
+# 📂 LOAD DATABASE
 # ==================================================
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 db_path = os.path.join(BASE_DIR, "attendance_history.db")
 
 if not os.path.exists(db_path):
-    st.error(f"Database not found at {db_path}")
+    st.error("attendance_history.db not found")
     st.stop()
 
-try:
-    conn = sqlite3.connect(db_path)
-    df = pd.read_sql("SELECT * FROM history", conn)
-    conn.close()
-except Exception as e:
-    st.error(f"Database Error: {e}")
-    st.stop()
+conn = sqlite3.connect(db_path)
+df = pd.read_sql("SELECT * FROM history", conn)
+conn.close()
 
 if df.empty:
     st.warning("No attendance data yet.")
     st.stop()
 
-# Validate columns
 required_cols = ["date","class_name","status","student_id","name"]
 for col in required_cols:
     if col not in df.columns:
-        st.error(f"Missing column in database: {col}")
+        st.error(f"Missing column: {col}")
         st.stop()
 
 df["date"] = pd.to_datetime(df["date"], errors="coerce")
@@ -108,18 +104,18 @@ today = df["date"].max().date()
 filtered = df[df["date"].dt.date == today]
 
 # ==================================================
-# 📘 LOAD STUDENT MASTER (SAFE PATH)
+# 📘 LOAD STUDENT MASTER
 # ==================================================
 excel_path = os.path.join(BASE_DIR, "StudentData.xlsx")
 
 if not os.path.exists(excel_path):
-    st.error(f"StudentData.xlsx not found at {excel_path}")
+    st.error("StudentData.xlsx not found")
     st.stop()
 
 student_df = pd.read_excel(excel_path)
 
 if "Class" not in student_df.columns:
-    st.error("Column 'Class' not found in StudentData.xlsx")
+    st.error("Column 'Class' missing in StudentData.xlsx")
     st.stop()
 
 student_df["class_name"] = student_df["Class"].apply(
@@ -144,7 +140,7 @@ if selected_class != "ทั้งหมด":
     filtered = filtered[filtered["class_name"] == selected_class]
 
 # ==================================================
-# 📊 KPI CALCULATION
+# 📊 KPI CALCULATION (EXECUTIVE)
 # ==================================================
 if selected_class != "ทั้งหมด":
     total_students = len(student_df[student_df["class_name"] == selected_class])
@@ -153,19 +149,18 @@ elif selected_grade != "ทั้งหมด":
 else:
     total_students = len(student_df)
 
-late = len(filtered[filtered["status"]=="late"])
-absent = len(filtered[filtered["status"]=="absent"])
-ontime = len(filtered[filtered["status"]=="ontime"])
+today_records = filtered.copy()
 
-if "checkout_status" in filtered.columns:
-    checked_out = len(filtered[filtered["checkout_status"]=="ออกจากโรงเรียนแล้ว"])
-    not_out = len(filtered[filtered["checkout_status"]=="ยังไม่สแกนออก"])
-else:
-    checked_out = 0
-    not_out = 0
+late = len(today_records[today_records["status"]=="late"])
+absent = len(today_records[today_records["status"]=="absent"])
+ontime = len(today_records[today_records["status"]=="ontime"])
 
-attendance_rate = ((ontime+late)/total_students*100) if total_students else 0
-checkout_rate = (checked_out/total_students*100) if total_students else 0
+scanned = ontime + late
+not_scanned = total_students - len(today_records)
+if not_scanned < 0:
+    not_scanned = 0
+
+attendance_rate = (scanned/total_students*100) if total_students else 0
 
 # ==================================================
 # 📊 KPI DISPLAY
@@ -180,12 +175,12 @@ def kpi(col,value,label,color):
     </div>
     """, unsafe_allow_html=True)
 
-kpi(k1,total_students,"Students","#60a5fa")
-kpi(k2,f"{attendance_rate:.1f}%","Attendance","#22c55e")
-kpi(k3,late,"Late","#f97316")
-kpi(k4,absent,"Absent","#ef4444")
-kpi(k5,f"{checkout_rate:.1f}%","Checkout %","#facc15")
-kpi(k6,not_out,"Not Checkout","#eab308")
+kpi(k1,total_students,"👥 Total","#60a5fa")
+kpi(k2,scanned,"✅ Scanned","#22c55e")
+kpi(k3,not_scanned,"❌ Not Scanned","#ef4444")
+kpi(k4,late,"⏰ Late","#f97316")
+kpi(k5,absent,"🚫 Absent","#dc2626")
+kpi(k6,f"{attendance_rate:.1f}%","📊 Attendance","#facc15")
 
 if late > 0:
     st.markdown("""
@@ -197,45 +192,39 @@ if late > 0:
 st.markdown("---")
 
 # ==================================================
-# 📊 CHARTS
+# 📊 STATUS SUMMARY PIE
 # ==================================================
-colA,colB,colC = st.columns(3)
+summary_df = pd.DataFrame({
+    "Status":["Scanned","Not Scanned","Late","Absent"],
+    "Count":[scanned,not_scanned,late,absent]
+})
 
-with colA:
-    st.markdown("### Attendance Overview")
-    if not filtered.empty:
-        status_counts = filtered["status"].value_counts().reset_index()
-        status_counts.columns=["Status","Count"]
-        fig1 = px.pie(status_counts,names="Status",values="Count",hole=0.5)
-        st.plotly_chart(fig1,use_container_width=True)
+fig_summary = px.pie(summary_df,names="Status",values="Count",hole=0.4)
+st.plotly_chart(fig_summary,use_container_width=True)
 
-with colB:
-    st.markdown("### Weekly Late Trend")
-    last7 = df[df["date"].dt.date >= today - timedelta(days=6)].copy()
-    last7["day"] = last7["date"].dt.date
-    trend = (
-        last7[last7["status"]=="late"]
-        .groupby("day")
-        .size()
-        .reset_index(name="Late")
-    )
-    if not trend.empty:
-        fig_area = px.area(trend,x="day",y="Late",markers=True)
-        st.plotly_chart(fig_area,use_container_width=True)
+# ==================================================
+# 📈 WEEKLY LATE TREND
+# ==================================================
+st.subheader("📈 Weekly Late Trend")
 
-with colC:
-    st.markdown("### Checkout Overview")
-    if "checkout_status" in filtered.columns:
-        checkout_counts = filtered["checkout_status"].value_counts().reset_index()
-        checkout_counts.columns=["Status","Count"]
-        fig2 = px.bar(checkout_counts,x="Status",y="Count")
-        st.plotly_chart(fig2,use_container_width=True)
+last7 = df[df["date"].dt.date >= today - timedelta(days=6)].copy()
+last7["day"] = last7["date"].dt.date
+
+trend = (
+    last7[last7["status"]=="late"]
+    .groupby("day")
+    .size()
+    .reset_index(name="Late")
+)
+
+if not trend.empty:
+    fig_area = px.area(trend,x="day",y="Late",markers=True)
+    st.plotly_chart(fig_area,use_container_width=True)
 
 # ==================================================
 # ⚡ RECENT SCANS
 # ==================================================
-st.markdown("---")
-st.markdown("### ⚡ Recent Scans")
+st.subheader("⚡ Recent Scans")
 
 if "time" in df.columns:
     df["time"] = pd.to_datetime(df["time"], errors="coerce")
@@ -246,6 +235,11 @@ if "time" in df.columns:
     )
 else:
     recent = df.sort_values("date", ascending=False).head(5)
+
+st.dataframe(
+    recent[["date","class_name","student_id","name","status"]],
+    use_container_width=True
+)
 
 st.dataframe(
     recent[["date","class_name","student_id","name","status"]],
