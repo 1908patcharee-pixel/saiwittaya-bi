@@ -7,13 +7,18 @@ import os
 
 st.set_page_config(layout="wide")
 
-# ==================================================
-# 🔄 AUTO REFRESH (10 วินาที)
-# ==================================================
-st.markdown(
-    "<meta http-equiv='refresh' content='10'>",
-    unsafe_allow_html=True
-)
+from streamlit.runtime.scriptrunner import add_script_run_ctx
+import threading
+import time
+
+def auto_refresh():
+    while True:
+        time.sleep(10)
+        st.rerun()
+
+thread = threading.Thread(target=auto_refresh)
+thread.start()
+
 
 # ==================================================
 # 🎨 STYLE
